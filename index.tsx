@@ -12,13 +12,15 @@ import {
   Trophy,
   Activity,
   Palette,
-  Clock,
   Cloud,
   ShieldCheck,
   User as UserIcon,
-  FileText,
-  Lock,
-  AlertTriangle
+  AlertTriangle,
+  HelpCircle,
+  ExternalLink,
+  Copy,
+  CheckCircle,
+  Info
 } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, useMap } from 'react-leaflet';
 import L from 'leaflet';
@@ -28,13 +30,8 @@ import * as XLSX from 'xlsx';
 declare const google: any;
 declare const gapi: any;
 
-/**
- * ⚠️ 실제 구글 연동을 위한 설정값
- * 1. Google Cloud Console에서 발급받은 값을 입력하세요.
- * 2. '승인된 JavaScript 원본'에 현재 접속 중인 주소(Origin)가 등록되어 있어야 합니다.
- */
-const CLIENT_ID = 'YOUR_CLIENT_ID_HERE.apps.googleusercontent.com';
-const API_KEY = 'YOUR_API_KEY_HERE';
+const CLIENT_ID = '296392137676-4mn9qsksd9c3s07f683sdklpk64hkk9t.apps.googleusercontent.com';
+const API_KEY = 'AIzaSyD6_DKtdFSyENLpgwfsq9WlCh6hGH0zfR0';
 const SCOPES = 'https://www.googleapis.com/auth/drive.readonly';
 
 // --- Types ---
@@ -148,43 +145,39 @@ const App = () => {
   const [selectedYear, setSelectedYear] = useState<number>(0);
   const [selectedMonth, setSelectedMonth] = useState<number>(0);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [selectedProject, setSelectedProject] = useState<GroupedProject | null>(null);
   const [activeTab, setActiveTab] = useState<'progress' | 'info' | 'spec'>('progress');
-  const [baselineDate, setBaselineDate] = useState<string>("");
-
+  
   const [isProcessing, setIsProcessing] = useState(false);
   const [loadingStatus, setLoadingStatus] = useState("");
   const [progressValue, setProgressValue] = useState(0);
 
   // 구글 연동 상태
   const [accessToken, setAccessToken] = useState<string | null>(null);
-  const [isGapiLoaded, setIsGapiLoaded] = useState(false);
   const tokenClientRef = useRef<any>(null);
+  const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
-    const now = new Date();
-    setBaselineDate(`${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, '0')}.${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`);
-  }, [data]);
-
-  // 구글 SDK 초기화 로직 보강
+  // 구글 SDK 초기화 로직
   useEffect(() => {
     const loadScripts = () => {
       // @ts-ignore
       if (typeof google !== 'undefined' && typeof gapi !== 'undefined') {
-        // GAPI 초기화
         gapi.load('client:picker', () => {
-          setIsGapiLoaded(true);
           gapi.client.load('drive', 'v3');
         });
 
-        // GIS 초기화
         tokenClientRef.current = google.accounts.oauth2.initTokenClient({
           client_id: CLIENT_ID,
           scope: SCOPES,
           callback: (resp: any) => {
             if (resp.error) {
-              console.error("Auth error:", resp.error);
+              console.error("Auth error:", resp);
               setIsProcessing(false);
+              // 승인 오류(400) 발생 시 가이드 모달 유도
+              if (resp.error === 'invalid_request') {
+                setIsHelpOpen(true);
+              }
               return;
             }
             setAccessToken(resp.access_token);
@@ -230,15 +223,14 @@ const App = () => {
         .build();
       picker.setVisible(true);
     } catch (e) {
-      console.error("Picker error:", e);
-      alert("Picker를 띄우는 중 오류가 발생했습니다. 구글 콘솔의 API Key 설정을 확인하세요.");
       setIsProcessing(false);
+      setIsHelpOpen(true);
     }
   };
 
   const downloadAndParseFile = async (fileId: string, fileName: string, token: string) => {
     setIsProcessing(true);
-    setLoadingStatus(`'${fileName}' 다운로드 중...`);
+    setLoadingStatus(`'${fileName}' 로드 중...`);
     setProgressValue(20);
 
     try {
@@ -246,7 +238,7 @@ const App = () => {
         headers: { Authorization: `Bearer ${token}` }
       });
 
-      if (!response.ok) throw new Error('파일 다운로드 실패. 권한을 확인하세요.');
+      if (!response.ok) throw new Error('파일 다운로드 실패');
       
       const blob = await response.blob();
       const arrayBuffer = await blob.arrayBuffer();
@@ -273,30 +265,24 @@ const App = () => {
 
       await processAndSaveData(parsed);
     } catch (err: any) {
-      alert(`파일 로드 오류: ${err.message}`);
+      alert(`데이터 로드 실패: ${err.message}`);
       setIsProcessing(false);
     }
   };
 
   const handleDriveConnect = useCallback(() => {
-    if (CLIENT_ID === 'YOUR_CLIENT_ID_HERE.apps.googleusercontent.com') {
-      alert("먼저 index.tsx 상단의 CLIENT_ID와 API_KEY를 실제 구글 클라우드 콘솔 발급값으로 수정해야 합니다.");
-      return;
-    }
-    
     if (tokenClientRef.current) {
       setIsProcessing(true);
-      setLoadingStatus("구글 로그인 팝업 확인 중...");
-      // 팝업이 뜨지 않는다면 브라우저의 팝업 차단 설정이나 Origin 설정을 확인해야 합니다.
+      setLoadingStatus("구글 인증 창 확인 중...");
       tokenClientRef.current.requestAccessToken({ prompt: 'consent' });
     } else {
-      alert('구글 API를 불러오지 못했습니다. 인터넷 연결 및 스크립트 로드 상태를 확인하세요.');
+      alert('구글 서비스 로드 중입니다. 잠시 후 시도해주세요.');
     }
   }, []);
 
   const processAndSaveData = async (rawData: ExcelRow[]) => {
     setIsProcessing(true);
-    setLoadingStatus("위치 정보 보정 및 데이터 취합 중...");
+    setLoadingStatus("현장 좌표 보정 중...");
     setProgressValue(60);
     const rowsToGeocode = rawData.filter(d => (!d.latitude || !d.longitude) && d.address && d.address.length > 5);
     
@@ -324,7 +310,7 @@ const App = () => {
       return d;
     });
     setData(finalData);
-    setLoadingStatus("데이터 동기화 완료");
+    setLoadingStatus("대시보드 업데이트 완료");
     setProgressValue(100);
     setTimeout(() => setIsProcessing(false), 800);
   };
@@ -356,7 +342,6 @@ const App = () => {
         })).filter(r => r.project_name);
         processAndSaveData(parsed);
       } catch (err) {
-        console.error(err);
         setIsProcessing(false);
       }
     };
@@ -373,38 +358,43 @@ const App = () => {
 
   const summary = useMemo(() => {
     const uniqueProjects = new Set(filteredData.map(d => d.project_name));
-    const totalSpec = filteredData.reduce((sum, d) => sum + (d.spec_amount || 0), 0);
+    const totalSpec = filteredData.reduce((sum, d) => sum + (Number(d.spec_amount) || 0), 0);
     const consMap: Record<string, number> = {};
     const desMap: Record<string, number> = {};
 
     filteredData.forEach(d => {
       const c = d.constructor || '기타';
       const ds = d.designer || '기타';
-      consMap[c] = (consMap[c] || 0) + (d.spec_amount || 0);
-      desMap[ds] = (desMap[ds] || 0) + (d.spec_amount || 0);
+      consMap[c] = (Number(consMap[c]) || 0) + (Number(d.spec_amount) || 0);
+      desMap[ds] = (Number(desMap[ds]) || 0) + (Number(d.spec_amount) || 0);
     });
     
-    const top3Cons = Object.entries(consMap).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name, amount]) => ({ name, amount }));
-    const top3Des = Object.entries(desMap).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name, amount]) => ({ name, amount }));
+    // Explicitly cast to number to avoid arithmetic operation errors
+    const top3Cons = Object.entries(consMap).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 5).map(([name, amount]) => ({ name, amount }));
+    const top3Des = Object.entries(desMap).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 5).map(([name, amount]) => ({ name, amount }));
 
     return { siteCount: uniqueProjects.size, totalSpec, top3Cons, top3Des };
   }, [filteredData]);
 
   const trends = useMemo(() => {
-    const years = Array.from(new Set(data.map(d => d.year))).sort((a, b) => a - b);
+    // Cast comparison values to number to fix arithmetic errors
+    const years = Array.from(new Set(data.map(d => d.year))).sort((a, b) => Number(a) - Number(b));
     const yearTrendMap: Record<number, number> = {};
-    data.forEach(d => { yearTrendMap[d.year] = (yearTrendMap[d.year] || 0) + d.spec_amount; });
-    const yearTrend = Object.entries(yearTrendMap).map(([l, v]) => ({ label: `${l}년`, value: v }));
+    data.forEach(d => { 
+      yearTrendMap[d.year] = (Number(yearTrendMap[d.year]) || 0) + Number(d.spec_amount); 
+    });
+    const yearTrend = Object.entries(yearTrendMap).map(([l, v]) => ({ label: `${l}년`, value: Number(v) }));
 
     const monthTrendMap: Record<number, number> = {};
-    const yr = selectedYear === 0 ? (years[years.length-1] || 0) : selectedYear;
-    // Fix line 394: Explicitly cast arithmetic operands to number using Number() to handle potential TypeScript inference issues in complex expressions.
-    data.filter(d => d.year === yr).forEach(d => { 
-      const currentVal = Number(monthTrendMap[d.month] || 0);
-      const newVal = Number(d.spec_amount);
-      monthTrendMap[d.month] = currentVal + newVal; 
+    // Use explicit bounds check for array access and avoid direct subtraction if possible
+    const lastYearIndex = years.length > 0 ? years.length - 1 : 0;
+    const yr = selectedYear === 0 ? (years.length > 0 ? years[lastYearIndex] : 0) : selectedYear;
+    
+    data.filter(d => Number(d.year) === Number(yr)).forEach(d => { 
+      const currentVal: number = Number(monthTrendMap[d.month] || 0);
+      monthTrendMap[d.month] = currentVal + Number(d.spec_amount); 
     });
-    const monthTrend = Array.from({ length: 12 }, (_, i) => ({ label: `${i + 1}월`, value: monthTrendMap[i + 1] || 0 }));
+    const monthTrend = Array.from({ length: 12 }, (_, i) => ({ label: `${i + 1}월`, value: Number(monthTrendMap[i + 1] || 0) }));
 
     return { yearTrend, monthTrend };
   }, [data, selectedYear]);
@@ -425,16 +415,64 @@ const App = () => {
     return Object.values(groups);
   }, [filteredData]);
 
-  const getStatusClasses = (status: string) => {
-    const text = status || '';
-    if (text.includes('납품중')) return 'bg-emerald-500 text-white shadow-emerald-200';
-    if (text.includes('납품완료')) return 'bg-slate-400 text-white shadow-slate-200';
-    if (text.includes('납품확인')) return 'bg-red-500 text-white shadow-red-200';
-    return 'bg-indigo-600 text-white shadow-indigo-200';
+  const copyOrigin = () => {
+    navigator.clipboard.writeText(window.location.origin);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
     <div className="min-h-screen flex flex-col h-screen overflow-hidden bg-[#f0f4f8]">
+      {/* 가이드 모달 */}
+      {isHelpOpen && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[6000] flex items-center justify-center p-6 animate-in fade-in">
+          <div className="bg-white rounded-[2.5rem] w-full max-w-2xl shadow-2xl overflow-hidden animate-in zoom-in slide-in-from-bottom-10 duration-500">
+            <div className="p-10 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="bg-amber-100 p-3 rounded-2xl text-amber-600"><AlertTriangle className="w-6 h-6" /></div>
+                <h3 className="text-xl font-black text-slate-800">구글 승인 오류 해결 가이드</h3>
+              </div>
+              <button onClick={() => setIsHelpOpen(false)} className="p-2 hover:bg-slate-200 rounded-xl transition-all"><X className="w-6 h-6 text-slate-400" /></button>
+            </div>
+            <div className="p-10 space-y-8 overflow-y-auto max-h-[70vh] custom-scrollbar">
+              <div className="bg-indigo-50 p-6 rounded-3xl border border-indigo-100">
+                <h4 className="flex items-center gap-2 font-black text-indigo-900 text-sm mb-3"><Copy className="w-4 h-4" /> 1단계: JavaScript 원본 등록</h4>
+                <p className="text-xs text-indigo-700/80 leading-relaxed mb-4">구글 클라우드 콘솔의 '사용자 인증 정보' 메뉴에서 아래 주소를 **'승인된 JavaScript 원본'**에 추가해야 합니다.</p>
+                <div className="flex items-center gap-2 bg-white p-3 rounded-2xl border border-indigo-200 shadow-sm">
+                  <code className="text-xs font-mono font-bold text-indigo-600 flex-1 truncate">{window.location.origin}</code>
+                  <button onClick={copyOrigin} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-[10px] font-black transition-all">
+                    {copied ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />} {copied ? '복사됨' : '복사'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-6">
+                <div className="flex gap-4">
+                  <div className="bg-slate-100 w-8 h-8 rounded-full flex items-center justify-center font-black text-xs shrink-0">2</div>
+                  <div>
+                    <h4 className="font-black text-slate-800 text-sm mb-1">테스트 사용자 추가</h4>
+                    <p className="text-xs text-slate-500 leading-relaxed">'OAuth 동의 화면' 하단의 **Test Users** 섹션에 현재 로그인하려는 Gmail 주소를 등록했는지 확인하세요.</p>
+                  </div>
+                </div>
+                <div className="flex gap-4">
+                  <div className="bg-slate-100 w-8 h-8 rounded-full flex items-center justify-center font-black text-xs shrink-0">3</div>
+                  <div>
+                    <h4 className="font-black text-slate-800 text-sm mb-1">외부 접근 허용</h4>
+                    <p className="text-xs text-slate-500 leading-relaxed">팝업 차단이 설정되어 있다면 해제하고, 브라우저의 시크릿 창이 아닌 일반 창에서 시도해보세요.</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-4">
+                <a href="https://console.cloud.google.com/" target="_blank" className="flex items-center justify-center gap-2 w-full py-4 bg-slate-900 text-white rounded-2xl font-black text-xs hover:bg-black transition-all shadow-lg">
+                  구글 클라우드 콘솔로 이동 <ExternalLink className="w-4 h-4" />
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {isProcessing && (
         <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-xl z-[5000] flex flex-col items-center justify-center p-8 animate-in fade-in">
           <div className="max-w-lg w-full">
@@ -465,6 +503,10 @@ const App = () => {
         </div>
 
         <div className="flex items-center gap-6">
+          <button onClick={() => setIsHelpOpen(true)} className="p-2.5 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-indigo-600 transition-all" title="인증 오류 가이드">
+            <HelpCircle className="w-5 h-5" />
+          </button>
+          
           <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
             <button onClick={() => setRole('user')} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[9px] font-black transition-all ${role === 'user' ? 'bg-white shadow-sm text-slate-900' : 'text-slate-400 hover:text-slate-600'}`}>
               <UserIcon className="w-3 h-3" /> 사용자
@@ -484,7 +526,7 @@ const App = () => {
                 {accessToken ? '파일 탐색기 열기' : '구글 드라이브 연결'}
               </button>
               <label className="cursor-pointer bg-slate-900 hover:bg-black text-white px-5 py-2.5 rounded-xl text-xs font-black flex items-center gap-2 transition-all shadow-lg active:scale-95 group">
-                <FileSpreadsheet className="w-4 h-4 text-emerald-400" /> 로컬 엑셀 업로드
+                <FileSpreadsheet className="w-4 h-4 text-emerald-400" /> 엑셀 업로드
                 <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleFileUpload} />
               </label>
             </div>
@@ -513,15 +555,12 @@ const App = () => {
           ))}
         </div>
 
-        {CLIENT_ID.startsWith('YOUR') && (
-          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-center gap-3 text-amber-800">
-            <AlertTriangle className="w-5 h-5 shrink-0" />
-            <p className="text-xs font-medium">현재 <strong>CLIENT_ID</strong>와 <strong>API_KEY</strong>가 설정되지 않았습니다. 구글 드라이브 기능을 사용하려면 index.tsx의 상수값을 본인의 구글 클라우드 콘솔 발급값으로 수정해야 합니다.</p>
-          </div>
-        )}
-
         <div className="flex-1 flex gap-6 min-h-0">
           <div className="flex-[3] bg-white rounded-[2rem] shadow-sm border border-slate-100 overflow-hidden relative flex flex-col min-w-0">
+            <div className="absolute top-5 left-5 z-[1001] bg-white/90 backdrop-blur border border-slate-200 rounded-xl px-4 py-2 shadow-xl flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+              <span className="text-[10px] font-black text-slate-800 uppercase tracking-tighter">Live DC Network</span>
+            </div>
             <MapContainer center={[36.5, 127.5]} zoom={7} className="w-full h-full" zoomControl={false}>
               <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
               {groupedProjects.filter(p => p.latitude && p.longitude).map((p, i) => (
@@ -539,6 +578,12 @@ const App = () => {
           <div className="flex-[1.5] flex flex-col gap-4 min-w-[280px]">
             <MiniBarChart title="연도별 설계물량 추이" data={trends.yearTrend} color="#6366f1" labelSuffix="T" />
             <MiniBarChart title="월별 설계물량 추이" data={trends.monthTrend} color="#10b981" labelSuffix="T" />
+            <div className="bg-indigo-600 rounded-[2rem] p-8 text-white relative overflow-hidden shadow-indigo-200 shadow-xl flex flex-col justify-center">
+              <div className="absolute top-0 right-0 p-8 opacity-20"><Trophy className="w-24 h-24 rotate-12" /></div>
+              <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-1">Top Performer</p>
+              <h3 className="text-2xl font-black mb-2">{summary.top3Cons[0]?.name || "N/A"}</h3>
+              <p className="text-sm font-medium opacity-80">국내 데이터센터 인프라 구축 <br/>최다 실적을 기록 중입니다.</p>
+            </div>
           </div>
         </div>
       </main>
@@ -560,21 +605,29 @@ const App = () => {
               ))}
             </div>
             <div className="flex-1 overflow-y-auto p-10 custom-scrollbar">
-              {activeTab === 'progress' && <div className={`border-2 border-dashed rounded-3xl p-10 text-center shadow-inner text-xl font-black italic ${getStatusClasses(selectedProject.progress)}`}>" {selectedProject.progress || '정보 없음'} "</div>}
+              {activeTab === 'progress' && (
+                <div className={`border-2 border-dashed rounded-3xl p-12 text-center shadow-inner text-xl font-black italic flex flex-col items-center gap-4 ${
+                  (selectedProject.progress || '').includes('납품중') ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 
+                  (selectedProject.progress || '').includes('납품완료') ? 'bg-slate-50 text-slate-400 border-slate-200' : 'bg-indigo-50 text-indigo-600 border-indigo-200'
+                }`}>
+                  <div className="bg-white p-4 rounded-full shadow-lg"><Activity className="w-8 h-8" /></div>
+                  " {selectedProject.progress || '진행 정보 없음'} "
+                </div>
+              )}
               {activeTab === 'info' && (
                 <div className="space-y-8">
-                  <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 flex gap-4 items-center">
-                    <MapPin className="w-6 h-6 text-red-500" />
-                    <p className="font-black text-slate-800">{selectedProject.address}</p>
+                  <div className="bg-slate-50 p-8 rounded-3xl border border-slate-100 flex gap-5 items-center">
+                    <div className="bg-white p-3 rounded-2xl shadow-sm"><MapPin className="w-6 h-6 text-red-500" /></div>
+                    <p className="font-black text-slate-800 text-lg">{selectedProject.address}</p>
                   </div>
                   <div className="grid grid-cols-2 gap-6">
-                    <div className="p-6 bg-indigo-50/50 rounded-2xl border border-indigo-100">
-                      <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Designer</p>
-                      <p className="text-md font-black text-slate-800">{selectedProject.designer}</p>
+                    <div className="p-8 bg-indigo-50/50 rounded-3xl border border-indigo-100">
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-3">Designer</p>
+                      <p className="text-xl font-black text-slate-800">{selectedProject.designer}</p>
                     </div>
-                    <div className="p-6 bg-emerald-50/50 rounded-2xl border border-emerald-100">
-                      <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Constructor</p>
-                      <p className="text-md font-black text-slate-800">{selectedProject.constructor}</p>
+                    <div className="p-8 bg-emerald-50/50 rounded-3xl border border-emerald-100">
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-3">Constructor</p>
+                      <p className="text-xl font-black text-slate-800">{selectedProject.constructor}</p>
                     </div>
                   </div>
                 </div>
@@ -582,12 +635,15 @@ const App = () => {
               {activeTab === 'spec' && (
                 <div className="space-y-4">
                   {selectedProject.specs.map((s, idx) => (
-                    <div key={idx} className="p-6 bg-white border border-slate-100 rounded-2xl flex items-center justify-between shadow-sm">
+                    <div key={idx} className="p-8 bg-white border border-slate-100 rounded-3xl flex items-center justify-between shadow-sm hover:shadow-md transition-all">
                       <div>
-                        <p className="font-black text-slate-800">{s.product}</p>
-                        <p className="text-[9px] font-bold text-slate-400 uppercase">{s.amount.toLocaleString()} Ton</p>
+                        <p className="font-black text-slate-800 text-lg mb-1">{s.product}</p>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-black text-indigo-500 uppercase bg-indigo-50 px-2 py-0.5 rounded-md">Spec Capacity</span>
+                          <p className="text-xs font-bold text-slate-400 uppercase">{s.amount.toLocaleString()} Ton</p>
+                        </div>
                       </div>
-                      <div className="text-right bg-slate-50 px-4 py-2 rounded-xl font-black text-lg">{s.quantity} <span className="text-[9px] text-slate-400">UNIT</span></div>
+                      <div className="text-right bg-slate-50 px-6 py-4 rounded-2xl font-black text-2xl text-slate-800 border border-slate-100">{s.quantity} <span className="text-[10px] text-slate-400 ml-1">UNIT</span></div>
                     </div>
                   ))}
                 </div>

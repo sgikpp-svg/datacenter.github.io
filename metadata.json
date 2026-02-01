@@ -1,4 +1,3 @@
-
 {
   "description": "Admin/User separated Data Center Spec Status Dashboard with initial data, Excel upload, and Google Drive sync simulation.",
   "requestFramePermissions": [
