@@ -1,38 +1,46 @@
 
-import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { 
   BarChart3, 
   MapPin, 
   Building2, 
+  Calendar, 
   X, 
+  Info, 
   LayoutDashboard,
   HardDrive,
   FileSpreadsheet,
+  AlertCircle,
   Trophy,
-  Activity,
-  Palette,
-  Cloud,
-  ShieldCheck,
-  User as UserIcon,
-  AlertTriangle,
+  Database,
+  List,
+  SearchX,
+  Table as TableIcon,
+  Map as MapIcon,
+  CheckCircle2,
+  UploadCloud,
+  ArrowRight,
+  Loader2,
+  MapPinned,
+  ChevronRight,
+  Zap,
   HelpCircle,
-  ExternalLink,
-  Copy,
-  CheckCircle,
-  Info
+  FileSearch,
+  Activity,
+  Layers,
+  Search,
+  Palette,
+  TrendingUp,
+  Clock,
+  MapPinOff,
+  Filter,
+  Hammer,
+  ClipboardList
 } from 'lucide-react';
-import { MapContainer, TileLayer, Marker, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, useMap, Tooltip } from 'react-leaflet';
 import L from 'leaflet';
 import * as XLSX from 'xlsx';
-
-// --- Global declarations for Google APIs ---
-declare const google: any;
-declare const gapi: any;
-
-const CLIENT_ID = '296392137676-4mn9qsksd9c3s07f683sdklpk64hkk9t.apps.googleusercontent.com';
-const API_KEY = 'AIzaSyD6_DKtdFSyENLpgwfsq9WlCh6hGH0zfR0';
-const SCOPES = 'https://www.googleapis.com/auth/drive.readonly';
 
 // --- Types ---
 interface ExcelRow {
@@ -49,6 +57,7 @@ interface ExcelRow {
   product_name: string;
   quantity: number;
   spec_amount: number;
+  isGeocoded?: boolean;
 }
 
 interface GroupedProject {
@@ -70,11 +79,7 @@ const defaultIcon = L.icon({
   iconAnchor: [12, 41],
 });
 
-const INITIAL_MOCK_DATA: ExcelRow[] = [
-  { id: '1', project_name: '서울 데이터센터 A', year: 2024, month: 5, progress: '납품중', address: '서울특별시 중구 세종대로 110', latitude: 37.5665, longitude: 126.9780, designer: 'A 설계사', constructor: '삼성물산', product_name: '항온항습기', quantity: 20, spec_amount: 500 },
-  { id: '2', project_name: '판교 테크노벨리 DC', year: 2024, month: 6, progress: '납품완료', address: '경기도 성남시 분당구 판교역로 166', latitude: 37.3948, longitude: 127.1111, designer: 'B 설계사', constructor: '현대건설', product_name: '랙 시스템', quantity: 150, spec_amount: 1200 },
-];
-
+// 지도 중심 이동 컴포넌트
 const ChangeView = ({ center, zoom }: { center: [number, number], zoom?: number }) => {
   const map = useMap();
   useEffect(() => {
@@ -83,34 +88,48 @@ const ChangeView = ({ center, zoom }: { center: [number, number], zoom?: number 
   return null;
 };
 
+// --- 유틸리티 함수 ---
 const normalizeKey = (key: string) => key.toString().toLowerCase().replace(/[^a-z0-9가-힣]/g, '');
 
 const getVal = (row: any, aliases: string[]) => {
   const rowKeys = Object.keys(row);
   const normalizedAliases = aliases.map(normalizeKey);
-  const foundKey = rowKeys.find(k => normalizedAliases.includes(normalizeKey(k)));
+  
+  const foundKey = rowKeys.find(k => {
+    const nk = normalizeKey(k);
+    return normalizedAliases.includes(nk);
+  });
+  
   return foundKey ? row[foundKey] : undefined;
 };
 
 const parseNum = (val: any): number => {
   if (val === undefined || val === null || val === '') return 0;
   if (typeof val === 'number') return val;
-  const parsed = parseFloat(String(val).replace(/[^0-9.]/g, ''));
+  const cleaned = String(val).replace(/[^0-9.]/g, '');
+  const parsed = parseFloat(cleaned);
   return isNaN(parsed) ? 0 : parsed;
 };
 
 const geocodeAddress = async (address: string): Promise<{lat: number, lon: number} | null> => {
   try {
     const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1`, {
-      headers: { 'Accept-Language': 'ko-KR' }
+      headers: {
+        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7'
+      }
     });
     if (!response.ok) return null;
     const data = await response.json();
-    if (data && data.length > 0) return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
-  } catch (e) { console.error("Geocoding error:", address, e); }
+    if (data && data.length > 0) {
+      return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+    }
+  } catch (e) {
+    console.error("Geocoding error:", address, e);
+  }
   return null;
 };
 
+// --- 트렌드 차트 컴포넌트 ---
 const MiniBarChart = ({ data, color, title, labelSuffix = "" }: { data: { label: string, value: number }[], color: string, title: string, labelSuffix?: string }) => {
   const maxValue = Math.max(...data.map(d => d.value), 1);
   return (
@@ -129,7 +148,12 @@ const MiniBarChart = ({ data, color, title, labelSuffix = "" }: { data: { label:
               >
                 {d.value > 0 ? `${d.value.toLocaleString()}${labelSuffix}` : ""}
               </div>
-              <div className={`w-full rounded-t-sm transition-all duration-500 hover:brightness-90 cursor-default shadow-sm`} style={{ height: `${barHeight}%`, backgroundColor: color }}></div>
+              
+              <div 
+                className={`w-full rounded-t-sm transition-all duration-500 hover:brightness-90 cursor-default shadow-sm border-x border-t border-white/20`}
+                style={{ height: `${barHeight}%`, backgroundColor: color }}
+              >
+              </div>
               <span className="text-[8px] font-bold text-slate-400 mt-1.5 truncate w-full text-center leading-tight">{d.label}</span>
             </div>
           );
@@ -140,169 +164,131 @@ const MiniBarChart = ({ data, color, title, labelSuffix = "" }: { data: { label:
 };
 
 const App = () => {
-  const [role, setRole] = useState<'user' | 'admin'>('admin');
-  const [data, setData] = useState<ExcelRow[]>(INITIAL_MOCK_DATA);
+  const [data, setData] = useState<ExcelRow[]>([]);
   const [selectedYear, setSelectedYear] = useState<number>(0);
   const [selectedMonth, setSelectedMonth] = useState<number>(0);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
-  const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [selectedProject, setSelectedProject] = useState<GroupedProject | null>(null);
+  const [hoveredProject, setHoveredProject] = useState<GroupedProject | null>(null);
   const [activeTab, setActiveTab] = useState<'progress' | 'info' | 'spec'>('progress');
-  
+  const [viewMode, setViewMode] = useState<'map' | 'list'>('map');
+  const [listStatusFilter, setListStatusFilter] = useState<'all' | 'mapped' | 'missing'>('all');
+  const [baselineDate, setBaselineDate] = useState<string>("");
+
   const [isProcessing, setIsProcessing] = useState(false);
   const [loadingStatus, setLoadingStatus] = useState("");
-  const [progressValue, setProgressValue] = useState(0);
+  const [progress, setProgress] = useState(0);
 
-  // 구글 연동 상태
-  const [accessToken, setAccessToken] = useState<string | null>(null);
-  const tokenClientRef = useRef<any>(null);
-  const [copied, setCopied] = useState(false);
-
-  // 구글 SDK 초기화 로직
   useEffect(() => {
-    const loadScripts = () => {
-      // @ts-ignore
-      if (typeof google !== 'undefined' && typeof gapi !== 'undefined') {
-        gapi.load('client:picker', () => {
-          gapi.client.load('drive', 'v3');
-        });
+    const now = new Date();
+    const formatted = `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, '0')}.${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    setBaselineDate(formatted);
+  }, [data]);
 
-        tokenClientRef.current = google.accounts.oauth2.initTokenClient({
-          client_id: CLIENT_ID,
-          scope: SCOPES,
-          callback: (resp: any) => {
-            if (resp.error) {
-              console.error("Auth error:", resp);
-              setIsProcessing(false);
-              // 승인 오류(400) 발생 시 가이드 모달 유도
-              if (resp.error === 'invalid_request') {
-                setIsHelpOpen(true);
-              }
-              return;
-            }
-            setAccessToken(resp.access_token);
-            openPicker(resp.access_token);
-          },
-        });
+  const stats = useMemo(() => {
+    const years = Array.from(new Set(data.map(d => d.year))).sort((a: number, b: number) => a - b);
+    return { years };
+  }, [data]);
+
+  const availableMonths = useMemo(() => {
+    const relevantData = selectedYear === 0 ? data : data.filter(d => d.year === selectedYear);
+    return Array.from(new Set(relevantData.map(d => d.month))).sort((a: number, b: number) => a - b);
+  }, [data, selectedYear]);
+
+  const filteredData = useMemo(() => {
+    return data.filter(d => {
+      const yearMatch = selectedYear === 0 || d.year === selectedYear;
+      const monthMatch = selectedMonth === 0 || d.month === selectedMonth;
+      return yearMatch && monthMatch;
+    });
+  }, [data, selectedYear, selectedMonth]);
+
+  const listData = useMemo(() => {
+    if (listStatusFilter === 'all') return filteredData;
+    if (listStatusFilter === 'mapped') return filteredData.filter(d => d.latitude && d.longitude);
+    if (listStatusFilter === 'missing') return filteredData.filter(d => !d.latitude || !d.longitude);
+    return filteredData;
+  }, [filteredData, listStatusFilter]);
+
+  const summary = useMemo(() => {
+    const uniqueProjects = new Set(filteredData.map(d => d.project_name));
+    const totalSpec = filteredData.reduce((sum: number, d: ExcelRow) => sum + (Number(d.spec_amount) || 0), 0);
+    const consMap: Record<string, number> = {};
+    const desMap: Record<string, number> = {};
+
+    filteredData.forEach(d => {
+      const c = d.constructor && d.constructor !== '-' ? d.constructor : '기타';
+      const ds = d.designer && d.designer !== '-' ? d.designer : '기타';
+      consMap[c] = (consMap[c] || 0) + (Number(d.spec_amount) || 0);
+      desMap[ds] = (desMap[ds] || 0) + (Number(d.spec_amount) || 0);
+    });
+    
+    const top3Cons = Object.entries(consMap).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name, amount]) => ({ name, amount }));
+    const top3Des = Object.entries(desMap).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name, amount]) => ({ name, amount }));
+
+    return { siteCount: uniqueProjects.size, totalSpec, top3Cons, top3Des };
+  }, [filteredData]);
+
+  const trends = useMemo(() => {
+    const yearTrendMap: Record<number, number> = {};
+    data.forEach(d => { yearTrendMap[d.year] = (yearTrendMap[d.year] || 0) + d.spec_amount; });
+    const yearTrend = Object.entries(yearTrendMap).sort((a, b) => Number(a[0]) - Number(b[0])).map(([l, v]) => ({ label: `${l}년`, value: v }));
+
+    const monthTrendMap: Record<number, number> = {};
+    const yr = selectedYear === 0 ? (stats.years[stats.years.length-1] || 0) : selectedYear;
+    data.filter(d => d.year === yr).forEach(d => { monthTrendMap[d.month] = (monthTrendMap[d.month] || 0) + d.spec_amount; });
+    const monthTrend = Array.from({ length: 12 }, (_, i) => ({ label: `${i + 1}월`, value: monthTrendMap[i + 1] || 0 }));
+
+    const dMap: Record<string, number> = {};
+    filteredData.forEach(d => { 
+      const name = d.designer && d.designer !== '-' ? d.designer : '기타';
+      dMap[name] = (dMap[name] || 0) + d.spec_amount; 
+    });
+    const designerTrend = Object.entries(dMap).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([l, v]) => ({ label: l, value: v }));
+
+    return { yearTrend, monthTrend, designerTrend };
+  }, [data, filteredData, selectedYear, stats.years]);
+
+  const groupedProjects = useMemo(() => {
+    const groups: Record<string, GroupedProject> = {};
+    filteredData.forEach(d => {
+      if (!groups[d.project_name]) {
+        groups[d.project_name] = {
+          name: d.project_name, address: d.address, latitude: d.latitude, longitude: d.longitude,
+          designer: d.designer, constructor: d.constructor, progress: d.progress, specs: [], totalAmount: 0
+        };
       }
-    };
+      groups[d.project_name].specs.push({ product: d.product_name, quantity: d.quantity, amount: d.spec_amount });
+      groups[d.project_name].totalAmount += d.spec_amount;
+    });
+    return Object.values(groups);
+  }, [filteredData]);
 
-    const interval = setInterval(() => {
-      if (typeof google !== 'undefined' && typeof gapi !== 'undefined') {
-        loadScripts();
-        clearInterval(interval);
-      }
-    }, 500);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  const openPicker = (token: string) => {
-    try {
-      // @ts-ignore
-      const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
-        .setMimeTypes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel')
-        .setMode(google.picker.DocsViewMode.LIST);
-      
-      // @ts-ignore
-      const picker = new google.picker.PickerBuilder()
-        .enableFeature(google.picker.Feature.NAV_HIDDEN)
-        .setDeveloperKey(API_KEY)
-        .setAppId(CLIENT_ID)
-        .setOAuthToken(token)
-        .addView(view)
-        .setCallback((data: any) => {
-          // @ts-ignore
-          if (data.action === google.picker.Action.PICKED) {
-            const file = data.docs[0];
-            downloadAndParseFile(file.id, file.name, token);
-          } else if (data.action === google.picker.Action.CANCEL) {
-            setIsProcessing(false);
-          }
-        })
-        .build();
-      picker.setVisible(true);
-    } catch (e) {
-      setIsProcessing(false);
-      setIsHelpOpen(true);
-    }
-  };
-
-  const downloadAndParseFile = async (fileId: string, fileName: string, token: string) => {
-    setIsProcessing(true);
-    setLoadingStatus(`'${fileName}' 로드 중...`);
-    setProgressValue(20);
-
-    try {
-      const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-
-      if (!response.ok) throw new Error('파일 다운로드 실패');
-      
-      const blob = await response.blob();
-      const arrayBuffer = await blob.arrayBuffer();
-      setProgressValue(50);
-      
-      const wb = XLSX.read(arrayBuffer, { type: 'array' });
-      const json: any[] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
-      
-      const parsed: ExcelRow[] = json.map((row, idx) => ({
-        id: `gd-${idx}-${Date.now()}`,
-        project_name: String(getVal(row, ['project_name', '프로젝트명', '현장명']) || '').trim(),
-        year: parseNum(getVal(row, ['year', '연도'])),
-        month: parseNum(getVal(row, ['month', '월'])),
-        progress: String(getVal(row, ['progress', '진행내용', '상태']) || '-').trim(),
-        address: String(getVal(row, ['address', '주소', '상세주소']) || '-').trim(),
-        latitude: parseFloat(String(getVal(row, ['latitude', '위도']) || '')) || null,
-        longitude: parseFloat(String(getVal(row, ['longitude', '경도']) || '')) || null,
-        designer: String(getVal(row, ['designer', '설계사']) || '-').trim(),
-        constructor: String(getVal(row, ['constructor', '건설사']) || '-').trim(),
-        product_name: String(getVal(row, ['product_name', '제품명']) || '-').trim(),
-        quantity: parseNum(getVal(row, ['quantity', '물량'])),
-        spec_amount: parseNum(getVal(row, ['spec_amount', '스펙량', '합계'])),
-      })).filter(r => r.project_name);
-
-      await processAndSaveData(parsed);
-    } catch (err: any) {
-      alert(`데이터 로드 실패: ${err.message}`);
-      setIsProcessing(false);
-    }
-  };
-
-  const handleDriveConnect = useCallback(() => {
-    if (tokenClientRef.current) {
-      setIsProcessing(true);
-      setLoadingStatus("구글 인증 창 확인 중...");
-      tokenClientRef.current.requestAccessToken({ prompt: 'consent' });
-    } else {
-      alert('구글 서비스 로드 중입니다. 잠시 후 시도해주세요.');
-    }
-  }, []);
+  const projectsWithNoCoords = useMemo(() => {
+    return groupedProjects.filter(p => !p.latitude || !p.longitude);
+  }, [groupedProjects]);
 
   const processAndSaveData = async (rawData: ExcelRow[]) => {
     setIsProcessing(true);
-    setLoadingStatus("현장 좌표 보정 중...");
-    setProgressValue(60);
-    const rowsToGeocode = rawData.filter(d => (!d.latitude || !d.longitude) && d.address && d.address.length > 5);
-    
+    setLoadingStatus("데이터 분석 중...");
+    setProgress(5);
+    const rowsToGeocode = rawData.filter(d => (!d.latitude || !d.longitude) && d.address && d.address !== '-' && d.address.length > 5);
     if (rowsToGeocode.length === 0) {
       setData(rawData);
-      setProgressValue(100);
+      setProgress(100);
       setTimeout(() => setIsProcessing(false), 500);
       return;
     }
-
     const uniqueAddresses = Array.from(new Set(rowsToGeocode.map(d => d.address)));
     const geoCache: Record<string, {lat: number, lon: number}> = {};
     for (let i = 0; i < uniqueAddresses.length; i++) {
       const addr = uniqueAddresses[i];
-      setLoadingStatus(`좌표 변환 중 (${i + 1}/${uniqueAddresses.length})`);
+      setLoadingStatus(`주소를 지도 좌표로 변환 중... (${i + 1}/${uniqueAddresses.length})`);
+      setProgress(Math.round((i / uniqueAddresses.length) * 90) + 5);
       const coords = await geocodeAddress(addr);
       if (coords) geoCache[addr] = coords;
-      await new Promise(r => setTimeout(r, 600)); 
+      await new Promise(r => setTimeout(r, 1100));
     }
-
     const finalData = rawData.map(d => {
       if ((!d.latitude || !d.longitude) && geoCache[d.address]) {
         return { ...d, latitude: geoCache[d.address].lat, longitude: geoCache[d.address].lon };
@@ -310,8 +296,8 @@ const App = () => {
       return d;
     });
     setData(finalData);
-    setLoadingStatus("대시보드 업데이트 완료");
-    setProgressValue(100);
+    setLoadingStatus("완료되었습니다.");
+    setProgress(100);
     setTimeout(() => setIsProcessing(false), 800);
   };
 
@@ -326,214 +312,79 @@ const App = () => {
         const wb = XLSX.read(b, { type: 'array' });
         const json: any[] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
         const parsed: ExcelRow[] = json.map((row, idx) => ({
-          id: `row-${idx}-${Date.now()}`,
-          project_name: String(getVal(row, ['project_name', '프로젝트명', '현장명']) || '').trim(),
-          year: parseNum(getVal(row, ['year', '연도'])),
+          id: `row-${idx}`,
+          project_name: String(getVal(row, ['project_name', '프로젝트명', '현장명', 'PJT', 'project']) || ''),
+          year: parseNum(getVal(row, ['year', '연도', '년', '년도'])),
           month: parseNum(getVal(row, ['month', '월'])),
-          progress: String(getVal(row, ['progress', '진행내용', '상태']) || '-').trim(),
-          address: String(getVal(row, ['address', '주소', '상세주소']) || '-').trim(),
-          latitude: parseFloat(String(getVal(row, ['latitude', '위도']) || '')) || null,
-          longitude: parseFloat(String(getVal(row, ['longitude', '경도']) || '')) || null,
-          designer: String(getVal(row, ['designer', '설계사']) || '-').trim(),
-          constructor: String(getVal(row, ['constructor', '건설사']) || '-').trim(),
-          product_name: String(getVal(row, ['product_name', '제품명']) || '-').trim(),
-          quantity: parseNum(getVal(row, ['quantity', '물량'])),
-          spec_amount: parseNum(getVal(row, ['spec_amount', '스펙량', '합계'])),
+          progress: String(getVal(row, ['progress', '진행내용', '상태', 'status']) || '-'),
+          address: String(getVal(row, ['address', '주소', '상세주소', 'addr']) || '-'),
+          latitude: parseFloat(String(getVal(row, ['latitude', '위도', 'lat', 'y', 'latitude_val']) || '')) || null,
+          longitude: parseFloat(String(getVal(row, ['longitude', '경도', 'lng', 'long', 'x', 'longitude_val']) || '')) || null,
+          designer: String(getVal(row, ['designer', '설계사', '설계']) || '-'),
+          constructor: String(getVal(row, ['constructor', '건설사', '시공사', '시공']) || '-'),
+          product_name: String(getVal(row, ['product_name', '제품명', '품명']) || '-'),
+          quantity: parseNum(getVal(row, ['quantity', '물량', '수량'])),
+          spec_amount: parseNum(getVal(row, ['spec_amount', '스펙량', '스펙', '합계', 'amount'])),
         })).filter(r => r.project_name);
         processAndSaveData(parsed);
       } catch (err) {
+        console.error("Excel processing error", err);
         setIsProcessing(false);
       }
     };
     reader.readAsArrayBuffer(file);
   };
 
-  const filteredData = useMemo(() => {
-    return data.filter(d => {
-      const matchYear = selectedYear === 0 || d.year === selectedYear;
-      const matchMonth = selectedMonth === 0 || d.month === selectedMonth;
-      return matchYear && matchMonth;
-    });
-  }, [data, selectedYear, selectedMonth]);
-
-  const summary = useMemo(() => {
-    const uniqueProjects = new Set(filteredData.map(d => d.project_name));
-    const totalSpec = filteredData.reduce((sum, d) => sum + (Number(d.spec_amount) || 0), 0);
-    const consMap: Record<string, number> = {};
-    const desMap: Record<string, number> = {};
-
-    filteredData.forEach(d => {
-      const c = d.constructor || '기타';
-      const ds = d.designer || '기타';
-      consMap[c] = (Number(consMap[c]) || 0) + (Number(d.spec_amount) || 0);
-      desMap[ds] = (Number(desMap[ds]) || 0) + (Number(d.spec_amount) || 0);
-    });
-    
-    // Explicitly cast to number to avoid arithmetic operation errors
-    const top3Cons = Object.entries(consMap).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 5).map(([name, amount]) => ({ name, amount }));
-    const top3Des = Object.entries(desMap).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 5).map(([name, amount]) => ({ name, amount }));
-
-    return { siteCount: uniqueProjects.size, totalSpec, top3Cons, top3Des };
-  }, [filteredData]);
-
-  const trends = useMemo(() => {
-    // Cast comparison values to number to fix arithmetic errors
-    const years = Array.from(new Set(data.map(d => d.year))).sort((a, b) => Number(a) - Number(b));
-    const yearTrendMap: Record<number, number> = {};
-    data.forEach(d => { 
-      yearTrendMap[d.year] = (Number(yearTrendMap[d.year]) || 0) + Number(d.spec_amount); 
-    });
-    const yearTrend = Object.entries(yearTrendMap).map(([l, v]) => ({ label: `${l}년`, value: Number(v) }));
-
-    const monthTrendMap: Record<number, number> = {};
-    // Use explicit bounds check for array access and avoid direct subtraction if possible
-    const lastYearIndex = years.length > 0 ? years.length - 1 : 0;
-    const yr = selectedYear === 0 ? (years.length > 0 ? years[lastYearIndex] : 0) : selectedYear;
-    
-    data.filter(d => Number(d.year) === Number(yr)).forEach(d => { 
-      const currentVal: number = Number(monthTrendMap[d.month] || 0);
-      monthTrendMap[d.month] = currentVal + Number(d.spec_amount); 
-    });
-    const monthTrend = Array.from({ length: 12 }, (_, i) => ({ label: `${i + 1}월`, value: Number(monthTrendMap[i + 1] || 0) }));
-
-    return { yearTrend, monthTrend };
-  }, [data, selectedYear]);
-
-  const groupedProjects = useMemo(() => {
-    const groups: Record<string, GroupedProject> = {};
-    filteredData.forEach(d => {
-      const name = d.project_name.trim();
-      if (!groups[name]) {
-        groups[name] = {
-          name: name, address: d.address, latitude: d.latitude, longitude: d.longitude,
-          designer: d.designer, constructor: d.constructor, progress: d.progress, specs: [], totalAmount: 0
-        };
-      }
-      groups[name].specs.push({ product: d.product_name, quantity: d.quantity, amount: d.spec_amount });
-      groups[name].totalAmount += d.spec_amount;
-    });
-    return Object.values(groups);
-  }, [filteredData]);
-
-  const copyOrigin = () => {
-    navigator.clipboard.writeText(window.location.origin);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
   return (
     <div className="min-h-screen flex flex-col h-screen overflow-hidden bg-[#f0f4f8]">
-      {/* 가이드 모달 */}
-      {isHelpOpen && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[6000] flex items-center justify-center p-6 animate-in fade-in">
-          <div className="bg-white rounded-[2.5rem] w-full max-w-2xl shadow-2xl overflow-hidden animate-in zoom-in slide-in-from-bottom-10 duration-500">
-            <div className="p-10 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="bg-amber-100 p-3 rounded-2xl text-amber-600"><AlertTriangle className="w-6 h-6" /></div>
-                <h3 className="text-xl font-black text-slate-800">구글 승인 오류 해결 가이드</h3>
-              </div>
-              <button onClick={() => setIsHelpOpen(false)} className="p-2 hover:bg-slate-200 rounded-xl transition-all"><X className="w-6 h-6 text-slate-400" /></button>
-            </div>
-            <div className="p-10 space-y-8 overflow-y-auto max-h-[70vh] custom-scrollbar">
-              <div className="bg-indigo-50 p-6 rounded-3xl border border-indigo-100">
-                <h4 className="flex items-center gap-2 font-black text-indigo-900 text-sm mb-3"><Copy className="w-4 h-4" /> 1단계: JavaScript 원본 등록</h4>
-                <p className="text-xs text-indigo-700/80 leading-relaxed mb-4">구글 클라우드 콘솔의 '사용자 인증 정보' 메뉴에서 아래 주소를 **'승인된 JavaScript 원본'**에 추가해야 합니다.</p>
-                <div className="flex items-center gap-2 bg-white p-3 rounded-2xl border border-indigo-200 shadow-sm">
-                  <code className="text-xs font-mono font-bold text-indigo-600 flex-1 truncate">{window.location.origin}</code>
-                  <button onClick={copyOrigin} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-[10px] font-black transition-all">
-                    {copied ? <CheckCircle className="w-3 h-3" /> : <Copy className="w-3 h-3" />} {copied ? '복사됨' : '복사'}
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-6">
-                <div className="flex gap-4">
-                  <div className="bg-slate-100 w-8 h-8 rounded-full flex items-center justify-center font-black text-xs shrink-0">2</div>
-                  <div>
-                    <h4 className="font-black text-slate-800 text-sm mb-1">테스트 사용자 추가</h4>
-                    <p className="text-xs text-slate-500 leading-relaxed">'OAuth 동의 화면' 하단의 **Test Users** 섹션에 현재 로그인하려는 Gmail 주소를 등록했는지 확인하세요.</p>
-                  </div>
-                </div>
-                <div className="flex gap-4">
-                  <div className="bg-slate-100 w-8 h-8 rounded-full flex items-center justify-center font-black text-xs shrink-0">3</div>
-                  <div>
-                    <h4 className="font-black text-slate-800 text-sm mb-1">외부 접근 허용</h4>
-                    <p className="text-xs text-slate-500 leading-relaxed">팝업 차단이 설정되어 있다면 해제하고, 브라우저의 시크릿 창이 아닌 일반 창에서 시도해보세요.</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="pt-4">
-                <a href="https://console.cloud.google.com/" target="_blank" className="flex items-center justify-center gap-2 w-full py-4 bg-slate-900 text-white rounded-2xl font-black text-xs hover:bg-black transition-all shadow-lg">
-                  구글 클라우드 콘솔로 이동 <ExternalLink className="w-4 h-4" />
-                </a>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       {isProcessing && (
-        <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-xl z-[5000] flex flex-col items-center justify-center p-8 animate-in fade-in">
+        <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-xl z-[5000] flex flex-col items-center justify-center p-8 animate-in fade-in duration-300">
           <div className="max-w-lg w-full">
             <div className="flex justify-center mb-8">
-              <Activity className="w-12 h-12 text-indigo-400 animate-pulse" />
+              <div className="bg-indigo-500/20 p-6 rounded-3xl border border-indigo-500/30">
+                <Activity className="w-12 h-12 text-indigo-400 animate-pulse" />
+              </div>
             </div>
-            <h2 className="text-3xl font-black text-white text-center mb-4">{loadingStatus}</h2>
-            <div className="overflow-hidden h-4 mb-4 flex rounded-full bg-slate-800">
-              <div style={{ width: `${progressValue}%` }} className="bg-indigo-600 transition-all duration-300 rounded-full"></div>
+            <h2 className="text-3xl font-black text-white text-center mb-4 tracking-tighter">데이터 처리 중</h2>
+            <p className="text-slate-400 text-center mb-12 font-medium">{loadingStatus}</p>
+            <div className="overflow-hidden h-4 mb-4 text-xs flex rounded-full bg-slate-800 border border-slate-700">
+              <div style={{ width: `${progress}%` }} className="flex flex-col text-center whitespace-nowrap text-white justify-center bg-indigo-600 transition-all duration-500 rounded-full"></div>
             </div>
           </div>
         </div>
       )}
 
+      {/* HEADER */}
       <header className="bg-white border-b border-slate-200 px-8 py-4 flex items-center justify-between z-30 shadow-sm shrink-0">
         <div className="flex items-center gap-4">
           <div className="bg-slate-900 p-2.5 rounded-xl shadow-lg">
             <LayoutDashboard className="w-6 h-6 text-white" />
           </div>
-          <div>
-            <h1 className="text-xl font-black text-slate-800 tracking-tight">DC Spec Dashboard <span className="text-indigo-600 ml-1">v1.2</span></h1>
-            <div className="flex items-center gap-2 mt-0.5">
-              <span className={`text-[8px] font-black px-1.5 py-0.5 rounded border uppercase ${role === 'admin' ? 'bg-indigo-50 text-indigo-600 border-indigo-100' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
-                {role === 'admin' ? 'Administrator' : 'General User'}
-              </span>
-            </div>
-          </div>
+          <h1 className="text-xl font-black text-slate-800 tracking-tight">DC Spec Dashboard <span className="text-indigo-600 ml-1">v1.2</span></h1>
         </div>
-
         <div className="flex items-center gap-6">
-          <button onClick={() => setIsHelpOpen(true)} className="p-2.5 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-indigo-600 transition-all" title="인증 오류 가이드">
-            <HelpCircle className="w-5 h-5" />
-          </button>
-          
-          <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
-            <button onClick={() => setRole('user')} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[9px] font-black transition-all ${role === 'user' ? 'bg-white shadow-sm text-slate-900' : 'text-slate-400 hover:text-slate-600'}`}>
-              <UserIcon className="w-3 h-3" /> 사용자
-            </button>
-            <button onClick={() => setRole('admin')} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[9px] font-black transition-all ${role === 'admin' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}>
-              <ShieldCheck className="w-3 h-3" /> 관리자
-            </button>
+          <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl border border-slate-200 shadow-inner">
+            <select className="bg-transparent text-xs font-black focus:outline-none text-slate-700 cursor-pointer px-3 py-1.5" value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))}>
+              <option value={0}>연도 전체</option>
+              {stats.years.map(y => <option key={y} value={y}>{y}년</option>)}
+            </select>
+            <select className="bg-transparent text-xs font-black focus:outline-none text-slate-700 cursor-pointer px-3 py-1.5 border-l border-slate-200" value={selectedMonth} onChange={(e) => setSelectedMonth(Number(e.target.value))}>
+              <option value={0}>월 전체</option>
+              {availableMonths.map(m => <option key={m} value={m}>{m}월</option>)}
+            </select>
           </div>
-
-          {role === 'admin' && (
-            <div className="flex items-center gap-2">
-              <button 
-                onClick={handleDriveConnect}
-                className={`px-4 py-2.5 rounded-xl text-xs font-black flex items-center gap-2 transition-all border shadow-sm ${accessToken ? 'bg-blue-50 text-blue-600 border-blue-200' : 'bg-blue-600 text-white border-blue-700 hover:bg-blue-700'}`}
-              >
-                <Cloud className="w-4 h-4" />
-                {accessToken ? '파일 탐색기 열기' : '구글 드라이브 연결'}
-              </button>
-              <label className="cursor-pointer bg-slate-900 hover:bg-black text-white px-5 py-2.5 rounded-xl text-xs font-black flex items-center gap-2 transition-all shadow-lg active:scale-95 group">
-                <FileSpreadsheet className="w-4 h-4 text-emerald-400" /> 엑셀 업로드
-                <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleFileUpload} />
-              </label>
-            </div>
-          )}
+          <div className="flex items-center gap-2 text-slate-400 font-bold text-[10px] bg-white px-3 py-2 rounded-xl border border-slate-100 shadow-sm">
+            <Clock className="w-3.5 h-3.5" />
+            데이터 기준일: <span className="text-slate-600">{baselineDate || 'YYYY.MM.DD HH:mm'}</span>
+          </div>
+          <label className="cursor-pointer bg-slate-900 hover:bg-black text-white px-5 py-2.5 rounded-xl text-xs font-black flex items-center gap-2 transition-all shadow-lg active:scale-95 group">
+            <FileSpreadsheet className="w-4 h-4 text-emerald-400" /> 데이터 업로드
+            <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleFileUpload} />
+          </label>
         </div>
       </header>
 
+      {/* MAIN BODY */}
       <main className="flex-1 p-8 flex flex-col gap-6 overflow-hidden min-h-0">
         <div className="grid grid-cols-4 gap-6 shrink-0">
           {[
@@ -557,44 +408,191 @@ const App = () => {
 
         <div className="flex-1 flex gap-6 min-h-0">
           <div className="flex-[3] bg-white rounded-[2rem] shadow-sm border border-slate-100 overflow-hidden relative flex flex-col min-w-0">
-            <div className="absolute top-5 left-5 z-[1001] bg-white/90 backdrop-blur border border-slate-200 rounded-xl px-4 py-2 shadow-xl flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
-              <span className="text-[10px] font-black text-slate-800 uppercase tracking-tighter">Live DC Network</span>
+            <div className="absolute top-5 left-5 z-[1001] flex bg-white/90 backdrop-blur border border-slate-200 rounded-xl p-1 shadow-xl">
+              <button onClick={() => setViewMode('map')} className={`px-4 py-2 rounded-lg text-[10px] font-black transition-all ${viewMode === 'map' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-100'}`}>지도</button>
+              <button onClick={() => setViewMode('list')} className={`px-4 py-2 rounded-lg text-[10px] font-black transition-all ${viewMode === 'list' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-100'}`}>목록</button>
             </div>
-            <MapContainer center={[36.5, 127.5]} zoom={7} className="w-full h-full" zoomControl={false}>
-              <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-              {groupedProjects.filter(p => p.latitude && p.longitude).map((p, i) => (
-                <Marker 
-                  key={i} 
-                  position={[p.latitude!, p.longitude!]} 
-                  icon={defaultIcon} 
-                  eventHandlers={{ click: () => { setSelectedProject(p); setIsPanelOpen(true); }}}
-                />
-              ))}
-              {selectedProject?.latitude && <ChangeView center={[selectedProject.latitude, selectedProject.longitude]} zoom={11} />}
-            </MapContainer>
+
+            {viewMode === 'list' && (
+              <div className="absolute top-5 right-5 z-[1001] flex bg-white/90 backdrop-blur border border-slate-200 rounded-xl p-1 shadow-xl">
+                <button onClick={() => setListStatusFilter('all')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black transition-all ${listStatusFilter === 'all' ? 'bg-slate-800 text-white' : 'text-slate-500 hover:bg-slate-100'}`}>전체</button>
+                <button onClick={() => setListStatusFilter('mapped')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black transition-all ${listStatusFilter === 'mapped' ? 'bg-emerald-600 text-white' : 'text-slate-500 hover:bg-slate-100'}`}>지도표시</button>
+                <button onClick={() => setListStatusFilter('missing')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black transition-all ${listStatusFilter === 'missing' ? 'bg-amber-600 text-white' : 'text-slate-500 hover:bg-slate-100'}`}>좌표누락 ({projectsWithNoCoords.length})</button>
+              </div>
+            )}
+
+            {viewMode === 'map' ? (
+              <div className="relative w-full h-full">
+                <MapContainer center={[36.5, 127.5]} zoom={7} className="w-full h-full" zoomControl={false}>
+                  <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                  {groupedProjects.filter(p => p.latitude && p.longitude).map((p, i) => (
+                    <Marker 
+                      key={i} 
+                      position={[p.latitude!, p.longitude!]} 
+                      icon={defaultIcon} 
+                      eventHandlers={{ 
+                        click: () => { setSelectedProject(p); setIsPanelOpen(true); },
+                        mouseover: () => setHoveredProject(p),
+                        mouseout: () => setHoveredProject(null)
+                      }}
+                    >
+                    </Marker>
+                  ))}
+                  {selectedProject?.latitude && selectedProject?.longitude && (
+                    <ChangeView center={[selectedProject.latitude, selectedProject.longitude]} zoom={11} />
+                  )}
+                </MapContainer>
+
+                {/* HOVER CARD - 진행상황 배지가 제목 옆으로 이동 */}
+                {hoveredProject && (
+                  <div className="absolute top-5 right-5 z-[1001] w-72 bg-white/95 backdrop-blur-xl border border-slate-200 rounded-[2rem] shadow-2xl p-6 animate-in fade-in zoom-in-95 duration-200 pointer-events-none">
+                    <div className="flex items-start gap-3 mb-4">
+                      <div className="bg-slate-900 p-2 rounded-xl shrink-0 mt-0.5"><Building2 className="w-4 h-4 text-white" /></div>
+                      <div className="flex flex-col min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3 className="text-sm font-black text-slate-800 truncate max-w-[150px] leading-tight">{hoveredProject.name}</h3>
+                          <span className="px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-600 text-[8px] font-black border border-indigo-100 whitespace-nowrap">
+                            {hoveredProject.progress}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5"><Palette className="w-3 h-3" /> 설계사</span>
+                        <span className="text-[10px] font-bold text-slate-700">{hoveredProject.designer}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5"><Hammer className="w-3 h-3" /> 시공사</span>
+                        <span className="text-[10px] font-bold text-slate-700">{hoveredProject.constructor}</span>
+                      </div>
+                      <div className="pt-3 border-t border-slate-100 flex items-center justify-between mt-1">
+                        <span className="text-[10px] font-black text-indigo-600 uppercase tracking-widest">총 스펙량</span>
+                        <span className="text-sm font-black text-slate-900">{hoveredProject.totalAmount.toLocaleString()} <span className="text-[9px] text-slate-400">Ton</span></span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
+                {projectsWithNoCoords.length > 0 && (
+                  <div className="absolute bottom-5 left-5 z-[1001] bg-amber-50 border border-amber-200 rounded-2xl p-4 shadow-xl max-w-xs animate-in slide-in-from-bottom-2">
+                    <div className="flex items-start gap-3">
+                      <div className="bg-amber-100 p-2 rounded-xl text-amber-600"><MapPinOff className="w-4 h-4" /></div>
+                      <div>
+                        <p className="text-[10px] font-black text-amber-800 uppercase tracking-widest mb-1">지도 미표시 알림</p>
+                        <p className="text-[11px] font-medium text-amber-700 leading-relaxed">
+                          주소가 정확하지 않아 <span className="font-black">{projectsWithNoCoords.length}개</span> 현장을 지도에 표시하지 못했습니다.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex-1 overflow-auto p-6 pt-20 custom-scrollbar">
+                <table className="w-full text-left border-separate border-spacing-0">
+                  <thead className="sticky top-0 bg-white z-20">
+                    <tr>
+                      <th className="py-4 px-4 text-[9px] font-black text-slate-400 uppercase border-b border-slate-100 bg-white">현장명</th>
+                      <th className="py-4 px-4 text-[9px] font-black text-slate-400 uppercase border-b border-slate-100 bg-white">건설사</th>
+                      <th className="py-4 px-4 text-[9px] font-black text-slate-400 uppercase border-b border-slate-100 bg-white">설계사</th>
+                      <th className="py-4 px-4 text-[9px] font-black text-slate-400 uppercase text-center border-b border-slate-100 bg-white">스펙량</th>
+                      <th className="py-4 px-4 text-[9px] font-black text-slate-400 uppercase text-center border-b border-slate-100 bg-white">좌표 상태</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {listData.length > 0 ? listData.map((d, i) => {
+                      const hasCoords = d.latitude && d.longitude;
+                      return (
+                        <tr key={i} className={`hover:bg-slate-50 group cursor-pointer ${!hasCoords ? 'bg-amber-50/20' : ''}`} onClick={() => { const p = groupedProjects.find(gp => gp.name === d.project_name); if(p) {setSelectedProject(p); setIsPanelOpen(true);} }}>
+                          <td className="py-4 px-4 text-xs font-black text-slate-700">{d.project_name}</td>
+                          <td className="py-4 px-4 text-xs text-slate-500">{d.constructor}</td>
+                          <td className="py-4 px-4 text-xs text-slate-500">{d.designer}</td>
+                          <td className="py-4 px-4 text-xs font-mono font-bold text-indigo-600 text-center">{d.spec_amount.toLocaleString()}</td>
+                          <td className="py-4 px-4 text-center">
+                            {hasCoords ? (
+                              <span className="text-[8px] font-black text-emerald-500 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100 uppercase tracking-tighter">MAPPED</span>
+                            ) : (
+                              <span className="text-[8px] font-black text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 uppercase tracking-tighter">MISSING COORDS</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    }) : (
+                      <tr>
+                        <td colSpan={5} className="py-20 text-center">
+                          <div className="flex flex-col items-center gap-3">
+                            <SearchX className="w-10 h-10 text-slate-200" />
+                            <p className="text-sm font-bold text-slate-400">데이터가 없습니다.</p>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
 
           <div className="flex-[1.5] flex flex-col gap-4 min-w-[280px]">
             <MiniBarChart title="연도별 설계물량 추이" data={trends.yearTrend} color="#6366f1" labelSuffix="T" />
             <MiniBarChart title="월별 설계물량 추이" data={trends.monthTrend} color="#10b981" labelSuffix="T" />
-            <div className="bg-indigo-600 rounded-[2rem] p-8 text-white relative overflow-hidden shadow-indigo-200 shadow-xl flex flex-col justify-center">
-              <div className="absolute top-0 right-0 p-8 opacity-20"><Trophy className="w-24 h-24 rotate-12" /></div>
-              <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-1">Top Performer</p>
-              <h3 className="text-2xl font-black mb-2">{summary.top3Cons[0]?.name || "N/A"}</h3>
-              <p className="text-sm font-medium opacity-80">국내 데이터센터 인프라 구축 <br/>최다 실적을 기록 중입니다.</p>
+            <MiniBarChart title="설계사별 설계물량 추이" data={trends.designerTrend} color="#ec4899" labelSuffix="T" />
+          </div>
+
+          <div className="flex-[1] flex flex-col gap-4 min-w-[240px]">
+            <div className="bg-white rounded-2xl p-5 border border-slate-100 flex-1 flex flex-col shadow-sm">
+              <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                <BarChart3 className="w-3.5 h-3.5 text-amber-500" /> 시공사 순위
+              </h3>
+              <div className="flex-1 overflow-auto space-y-4 custom-scrollbar pr-1">
+                {summary.top3Cons.length > 0 ? summary.top3Cons.map((c, i) => (
+                  <div key={i} className="group">
+                    <div className="flex justify-between text-[11px] mb-1.5 font-bold">
+                      <span className="text-slate-700 truncate mr-2">{i+1}. {c.name}</span>
+                      <span className="text-amber-600 shrink-0">{c.amount.toLocaleString()}T</span>
+                    </div>
+                    <div className="h-1.5 bg-slate-50 rounded-full overflow-hidden border border-slate-100 shadow-inner">
+                      <div className="h-full bg-amber-500 rounded-full transition-all duration-700" style={{ width: `${(c.amount / (summary.top3Cons[0]?.amount || 1)) * 100}%` }} />
+                    </div>
+                  </div>
+                )) : <div className="text-[10px] text-slate-400 text-center py-4">No Data Available</div>}
+              </div>
+            </div>
+
+            <div className="bg-white rounded-2xl p-5 border border-slate-100 flex-1 flex flex-col shadow-sm">
+              <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                <Palette className="w-3.5 h-3.5 text-indigo-500" /> 설계사 순위
+              </h3>
+              <div className="flex-1 overflow-auto space-y-4 custom-scrollbar pr-1">
+                {summary.top3Des.length > 0 ? summary.top3Des.map((d, i) => (
+                  <div key={i} className="group">
+                    <div className="flex justify-between text-[11px] mb-1.5 font-bold">
+                      <span className="text-slate-700 truncate mr-2">{i+1}. {d.name}</span>
+                      <span className="text-indigo-600 shrink-0">{d.amount.toLocaleString()}T</span>
+                    </div>
+                    <div className="h-1.5 bg-slate-50 rounded-full overflow-hidden border border-slate-100 shadow-inner">
+                      <div className="h-full bg-indigo-500 rounded-full transition-all duration-700" style={{ width: `${(d.amount / (summary.top3Des[0]?.amount || 1)) * 100}%` }} />
+                    </div>
+                  </div>
+                )) : <div className="text-[10px] text-slate-400 text-center py-4">No Data Available</div>}
+              </div>
             </div>
           </div>
         </div>
       </main>
 
+      {/* SIDE PANEL */}
       {isPanelOpen && selectedProject && (
         <>
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[2000] animate-in fade-in" onClick={() => setIsPanelOpen(false)} />
           <aside className="fixed right-0 top-0 h-full w-full max-w-xl bg-white shadow-2xl z-[2001] flex flex-col animate-slide-in">
-            <style>{`@keyframes slide-in { from { transform: translateX(100%); } to { transform: translateX(0); } } .animate-slide-in { animation: slide-in 0.4s cubic-bezier(0.16, 1, 0.3, 1); }`}</style>
+            <style>{`@keyframes slide-in { from { transform: translateX(100%); } to { transform: translateX(0); } } .animate-slide-in { animation: slide-in 0.4s cubic-bezier(0.16, 1, 0.3, 1); } .custom-scrollbar::-webkit-scrollbar { width: 4px; } .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }`}</style>
             <div className="p-10 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
-              <h2 className="text-2xl font-black text-slate-800 tracking-tighter">{selectedProject.name}</h2>
+              <div>
+                <h2 className="text-2xl font-black text-slate-800 tracking-tighter">{selectedProject.name}</h2>
+              </div>
               <button onClick={() => setIsPanelOpen(false)} className="p-3 hover:bg-white rounded-xl text-slate-400 hover:text-slate-800 transition-all"><X className="w-6 h-6" /></button>
             </div>
             <div className="flex border-b border-slate-100 px-6">
@@ -605,29 +603,21 @@ const App = () => {
               ))}
             </div>
             <div className="flex-1 overflow-y-auto p-10 custom-scrollbar">
-              {activeTab === 'progress' && (
-                <div className={`border-2 border-dashed rounded-3xl p-12 text-center shadow-inner text-xl font-black italic flex flex-col items-center gap-4 ${
-                  (selectedProject.progress || '').includes('납품중') ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 
-                  (selectedProject.progress || '').includes('납품완료') ? 'bg-slate-50 text-slate-400 border-slate-200' : 'bg-indigo-50 text-indigo-600 border-indigo-200'
-                }`}>
-                  <div className="bg-white p-4 rounded-full shadow-lg"><Activity className="w-8 h-8" /></div>
-                  " {selectedProject.progress || '진행 정보 없음'} "
-                </div>
-              )}
+              {activeTab === 'progress' && <div className="bg-slate-50 border-2 border-dashed border-slate-200 rounded-3xl p-10 text-center shadow-inner text-xl font-black text-slate-700 italic">" {selectedProject.progress} "</div>}
               {activeTab === 'info' && (
                 <div className="space-y-8">
-                  <div className="bg-slate-50 p-8 rounded-3xl border border-slate-100 flex gap-5 items-center">
-                    <div className="bg-white p-3 rounded-2xl shadow-sm"><MapPin className="w-6 h-6 text-red-500" /></div>
-                    <p className="font-black text-slate-800 text-lg">{selectedProject.address}</p>
+                  <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 flex gap-4 items-center shadow-sm">
+                    <MapPin className="w-6 h-6 text-red-500" />
+                    <p className="font-black text-slate-800">{selectedProject.address}</p>
                   </div>
                   <div className="grid grid-cols-2 gap-6">
-                    <div className="p-8 bg-indigo-50/50 rounded-3xl border border-indigo-100">
-                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-3">Designer</p>
-                      <p className="text-xl font-black text-slate-800">{selectedProject.designer}</p>
+                    <div className="p-6 bg-indigo-50/50 rounded-2xl border border-indigo-100">
+                      <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Designer</p>
+                      <p className="text-md font-black text-slate-800">{selectedProject.designer}</p>
                     </div>
-                    <div className="p-8 bg-emerald-50/50 rounded-3xl border border-emerald-100">
-                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-3">Constructor</p>
-                      <p className="text-xl font-black text-slate-800">{selectedProject.constructor}</p>
+                    <div className="p-6 bg-emerald-50/50 rounded-2xl border border-emerald-100">
+                      <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Constructor</p>
+                      <p className="text-md font-black text-slate-800">{selectedProject.constructor}</p>
                     </div>
                   </div>
                 </div>
@@ -635,19 +625,26 @@ const App = () => {
               {activeTab === 'spec' && (
                 <div className="space-y-4">
                   {selectedProject.specs.map((s, idx) => (
-                    <div key={idx} className="p-8 bg-white border border-slate-100 rounded-3xl flex items-center justify-between shadow-sm hover:shadow-md transition-all">
-                      <div>
-                        <p className="font-black text-slate-800 text-lg mb-1">{s.product}</p>
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-black text-indigo-500 uppercase bg-indigo-50 px-2 py-0.5 rounded-md">Spec Capacity</span>
-                          <p className="text-xs font-bold text-slate-400 uppercase">{s.amount.toLocaleString()} Ton</p>
-                        </div>
+                    <div key={idx} className="p-6 bg-white border border-slate-100 rounded-2xl flex items-center justify-between shadow-sm hover:border-indigo-200 transition-all">
+                      <div className="overflow-hidden">
+                        <p className="font-black text-slate-800 truncate">{s.product}</p>
+                        <p className="text-[9px] font-bold text-slate-400 uppercase mt-0.5">{s.amount.toLocaleString()} Ton</p>
                       </div>
-                      <div className="text-right bg-slate-50 px-6 py-4 rounded-2xl font-black text-2xl text-slate-800 border border-slate-100">{s.quantity} <span className="text-[10px] text-slate-400 ml-1">UNIT</span></div>
+                      <div className="text-right bg-slate-50 px-4 py-2 rounded-xl border border-slate-100 font-black text-lg">{s.quantity} <span className="text-[9px] text-slate-400">UNIT</span></div>
                     </div>
                   ))}
+                  <div className="mt-8 p-10 bg-slate-900 rounded-[2.5rem] text-white flex justify-between items-center shadow-2xl">
+                    <div>
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">TOTAL AGGREGATED</p>
+                      <span className="text-5xl font-black">{selectedProject.totalAmount.toLocaleString()}</span>
+                      <span className="text-xl font-bold text-indigo-300 ml-2">Ton</span>
+                    </div>
+                  </div>
                 </div>
               )}
+            </div>
+            <div className="p-8 border-t border-slate-100 bg-slate-50">
+              <button onClick={() => setIsPanelOpen(false)} className="w-full bg-slate-900 text-white font-black py-5 rounded-2xl hover:bg-black transition-all shadow-xl text-xs uppercase tracking-widest">Close Panel</button>
             </div>
           </aside>
         </>

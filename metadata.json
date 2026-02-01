@@ -1,7 +1,7 @@
 {
-  "description": "Admin/User separated Data Center Spec Status Dashboard with initial data, Excel upload, and Google Drive sync simulation.",
+  "description": "Enterprise-grade Data Center Specification Status Dashboard with Excel integration and interactive mapping.",
   "requestFramePermissions": [
     "geolocation"
   ],
-  "name": "DC Dashboard Enterprise"
+  "name": "dc spec 260201"
 }
